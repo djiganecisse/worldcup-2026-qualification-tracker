@@ -86,23 +86,39 @@ Trois curseurs, par ordre d'impact :
 3. **`tools`** — l'advisor est en lecture seule : il conseille, il n'exécute
    pas. C'est à la fois une garantie de sûreté et ce qui maintient son coût bas.
 
-## Déploiement permanent sur Mac Mini
+## Déploiement permanent sur Mac Mini (Telegram)
+
+L'interface permanente est un **pont Telegram** (`telegram_bridge.py`, stdlib
+uniquement côté Telegram, comme le tracker) : tu parles à l'assistant depuis
+ton téléphone, le contexte de conversation persiste entre les messages, et
+aucun port n'est exposé sur le Mini (long-polling sortant uniquement).
 
 ```bash
-git pull                                      # récupérer cette branche
-bash hybrid-assistant/deploy/setup-macmini.sh # venv + SDK + test de fumée
+# Sur le Mac Mini :
+git pull
+cat > ~/.hybrid-assistant.env <<'EOF'
+TELEGRAM_BOT_TOKEN=123456:ABC-...
+TELEGRAM_CHAT_ID=123456789
+# HYBRID_AUTO=1              # optionnel : autorise Bash/Edit/Write
+EOF
+bash hybrid-assistant/deploy/setup-macmini.sh   # venv + SDK + service launchd
 ```
 
-Le script propose ensuite un service **launchd** (`deploy/com.hybrid-assistant.plist`)
-qui maintient l'assistant vivant dans une session tmux, relancée au démarrage
-de la machine :
+Le service launchd (`deploy/com.hybrid-assistant-telegram.plist`) relance le
+pont au boot et en cas de crash. Logs : `/tmp/hybrid-assistant-telegram.log`.
 
-```bash
-tmux attach -t hybrid-assistant   # reprendre la conversation, localement ou en SSH
-```
+Côté Telegram :
+- messages ordinaires → tours de conversation (contexte conservé) ;
+- `/new` → conversation vierge ; `/cost` → coût cumulé de la session ;
+- seul le `TELEGRAM_CHAT_ID` déclaré est écouté — tout autre chat est ignoré ;
+- chaque réponse se termine par le coût du tour et les agents sollicités.
 
-Prérequis sur le Mac Mini : Python 3.10+, `tmux` (`brew install tmux`), et des
-identifiants Anthropic (CLI Claude Code connecté, ou `ANTHROPIC_API_KEY`).
+Alternative sans Telegram : un REPL maintenu dans tmux
+(`deploy/com.hybrid-assistant.plist`), à reprendre avec
+`tmux attach -t hybrid-assistant`.
+
+Prérequis sur le Mac Mini : Python 3.10+ et des identifiants Anthropic
+(CLI Claude Code connecté, ou `ANTHROPIC_API_KEY` dans le fichier env).
 
 ## Limites connues
 

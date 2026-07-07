@@ -25,19 +25,35 @@ fi
 echo "== Test de fumée =="
 "$VENV/bin/python" "$APP_DIR/assistant.py" --once "Réponds exactement: OK"
 
-# 4. Service permanent (optionnel) : REPL toujours disponible dans tmux,
-#    relancé au démarrage de la machine par launchd.
+# 4. Service permanent — pont Telegram (recommandé)
+ENV_FILE="$HOME/.hybrid-assistant.env"
+if [ -f "$ENV_FILE" ]; then
+  echo "== Installation du service Telegram (secrets: $ENV_FILE) =="
+  mkdir -p ~/Library/LaunchAgents
+  sed "s|__APP_DIR__|$APP_DIR|g" "$APP_DIR/deploy/com.hybrid-assistant-telegram.plist" \
+    > ~/Library/LaunchAgents/com.hybrid-assistant-telegram.plist
+  launchctl unload ~/Library/LaunchAgents/com.hybrid-assistant-telegram.plist 2>/dev/null || true
+  launchctl load ~/Library/LaunchAgents/com.hybrid-assistant-telegram.plist
+  echo "✅ Service Telegram chargé — logs : /tmp/hybrid-assistant-telegram.log"
+else
+  cat <<EOF
+
+Pour le service Telegram permanent, crée $ENV_FILE :
+  TELEGRAM_BOT_TOKEN=123456:ABC-...
+  TELEGRAM_CHAT_ID=123456789
+  # HYBRID_AUTO=1            # optionnel : autorise Bash/Edit/Write
+puis relance ce script.
+EOF
+fi
+
+# 5. Alternative : REPL toujours disponible dans une session tmux.
 if command -v tmux >/dev/null 2>&1; then
   cat <<EOF
 
-Pour un service permanent :
+Alternative REPL (tmux) :
   sed "s|__APP_DIR__|$APP_DIR|g" "$APP_DIR/deploy/com.hybrid-assistant.plist" \\
     > ~/Library/LaunchAgents/com.hybrid-assistant.plist
   launchctl load ~/Library/LaunchAgents/com.hybrid-assistant.plist
-
-Puis, à tout moment (localement ou en SSH) :
   tmux attach -t hybrid-assistant
 EOF
-else
-  echo "ℹ️  Installe tmux (brew install tmux) pour le mode service permanent."
 fi
