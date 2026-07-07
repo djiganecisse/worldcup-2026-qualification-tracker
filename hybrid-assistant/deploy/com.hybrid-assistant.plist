@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Service launchd : maintient l'assistant hybride vivant dans une session
+     tmux nommée "hybrid-assistant", relancée au boot du Mac Mini.
+     __APP_DIR__ est remplacé par setup-macmini.sh. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hybrid-assistant</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>tmux has-session -t hybrid-assistant 2>/dev/null || tmux new-session -d -s hybrid-assistant '__APP_DIR__/.venv/bin/python __APP_DIR__/assistant.py'</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/hybrid-assistant.launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/hybrid-assistant.launchd.log</string>
+</dict>
+</plist>
