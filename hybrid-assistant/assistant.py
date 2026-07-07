@@ -33,6 +33,7 @@ import asyncio
 import os
 import sys
 import warnings
+from pathlib import Path
 
 from claude_agent_sdk import (
     AgentDefinition,
@@ -50,6 +51,38 @@ from claude_agent_sdk import (
 EXECUTOR_MODEL = os.environ.get("HYBRID_EXECUTOR_MODEL", "claude-sonnet-5")
 ADVISOR_MODEL = os.environ.get("HYBRID_ADVISOR_MODEL", "claude-fable-5")
 SCOUT_MODEL = os.environ.get("HYBRID_SCOUT_MODEL", "claude-haiku-4-5")
+
+# Plafond de dépense par session (le SDK arrête l'agent au-delà).
+MAX_BUDGET_USD = float(os.environ.get("HYBRID_MAX_BUDGET_USD", "2.0"))
+
+# Sources de réglages Claude Code à hériter (ex. "user" pour récupérer les
+# serveurs MCP configurés sur la machine). Vide = comportement autonome.
+SETTING_SOURCES = [s for s in os.environ.get("HYBRID_SETTING_SOURCES", "").split(",") if s]
+
+# Mémoire persistante inter-sessions : un simple fichier markdown que
+# l'assistant lit au démarrage et met à jour quand il apprend quelque chose.
+MEMORY_FILE = Path(os.environ.get("HYBRID_MEMORY_FILE", str(Path.home() / ".hybrid-assistant-memory.md")))
+MEMORY_MAX_CHARS = 8000
+
+
+def _memory_section() -> str:
+    try:
+        content = MEMORY_FILE.read_text(encoding="utf-8").strip()[:MEMORY_MAX_CHARS]
+    except OSError:
+        content = ""
+    return f"""
+
+## Mémoire persistante
+Ton fichier de mémoire est `{MEMORY_FILE}`. Son contenu au démarrage de cette
+session est reproduit ci-dessous. Quand tu apprends quelque chose de durable sur
+l'utilisateur (préférence, contexte de projet, correction importante), mets ce
+fichier à jour avec l'outil Edit ou Write — une information par ligne, concis,
+en supprimant ce qui est devenu faux. N'y stocke JAMAIS de secrets, tokens ou
+mots de passe.
+
+<memoire>
+{content or "(vide pour l'instant)"}
+</memoire>"""
 
 SYSTEM_PROMPT = """Tu es un assistant généraliste efficace. Tu es l'EXÉCUTEUR \
 d'une architecture hybride : tu fais toi-même le travail courant, et tu disposes \
@@ -168,7 +201,7 @@ def build_options(auto: bool) -> ClaudeAgentOptions:
 
     return ClaudeAgentOptions(
         model=EXECUTOR_MODEL,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=SYSTEM_PROMPT + _memory_section(),
         agents=AGENTS,
         # Lecture et recherche auto-approuvées ; l'outil Agent passe
         # volontairement par gate_tool (voir ci-dessus). Les écritures et Bash
@@ -176,9 +209,11 @@ def build_options(auto: bool) -> ClaudeAgentOptions:
         allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "TodoWrite"],
         can_use_tool=gate_tool,
         permission_mode="acceptEdits" if auto else "default",
-        # N'hérite pas des réglages Claude Code de la machine hôte :
-        # le comportement de l'assistant est entièrement défini ici.
-        setting_sources=[],
+        max_budget_usd=MAX_BUDGET_USD,
+        # Par défaut ([]), n'hérite d'aucun réglage Claude Code de la machine
+        # hôte. HYBRID_SETTING_SOURCES=user permet d'hériter des serveurs MCP
+        # configurés sur la machine (Gmail, Calendar, ...).
+        setting_sources=SETTING_SOURCES,
     )
 
 
