@@ -14,9 +14,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Le code doit compiler (stdlib uniquement, aucune dépendance)
+      # Tout le code doit compiler (stdlib uniquement, aucune dépendance)
       - name: Compile
-        run: python -m py_compile senegal_wc_tracker.py
+        run: |
+          python -m py_compile senegal_wc_tracker.py \
+            hybrid-assistant/assistant.py \
+            hybrid-assistant/telegram_bridge.py
+
+      # Les scripts shell de déploiement doivent être syntaxiquement valides
+      - name: Shell syntax
+        run: |
+          for f in hybrid-assistant/deploy/*.sh; do bash -n "$f"; done
 
       # La logique pure (classement, départages, seuils) doit passer
       - name: Unit tests

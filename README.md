@@ -25,7 +25,8 @@ works for any of the 48 sides.
   simulated. Without a key it runs in "after-match" mode.
 - Sends a **Telegram** message on meaningful change: ±5 points, crossing 25/50/75 %,
   flipping alive/eliminated, kickoff of the tracked team, or its match ending.
-- Extras in every message: **win-margin scenarios** ("win by 2 → 96 %") and a
+- Extras in every message: **outcome conditionals** for the tracked team's next match
+  (win / draw / loss → probability), **win-margin scenarios** ("win by 2 → 96 %") and a
   **sensitivity analysis** naming the other groups' matches that move your number most.
 
 ## Model
