@@ -68,6 +68,7 @@ TEAM = os.environ.get("WC_TRACK_TEAM", "Senegal")  # équipe suivie (paramétrab
 N_BEST_THIRDS = 8
 DEFAULT_SIMS = 12000
 PIVOTAL_MIN_IMPACT = 4.0   # n'afficher un match "à surveiller" qu'au-dessus de X pts d'impact
+MIN_CONDITIONAL_SAMPLE = 30   # sous ce nombre de tirages, une proba conditionnelle n'est pas affichée
 
 DELTA_PCT_TRIGGER = 5.0
 THRESHOLDS = [25.0, 50.0, 75.0]
@@ -224,14 +225,18 @@ def parse_kickoff(m):
     if not d:
         return None
     try:
-        hh, mm, off = 12, 0, 0
+        hh, mm, off_min = 12, 0, 0
         if t:
             parts = t.split()
             hh, mm = int(parts[0].split(":")[0]), int(parts[0].split(":")[1])
             if len(parts) > 1 and parts[1].upper().startswith("UTC"):
-                off = int(parts[1].upper().replace("UTC", "") or 0)
+                raw = parts[1].upper().replace("UTC", "").strip()
+                if raw:
+                    sign = -1 if raw.startswith("-") else 1
+                    oh, _, om = raw.lstrip("+-").partition(":")
+                    off_min = sign * (int(oh) * 60 + int(om or 0))
         local = datetime(int(d[:4]), int(d[5:7]), int(d[8:10]), hh, mm)
-        return (local - timedelta(hours=off)).replace(tzinfo=timezone.utc)
+        return (local - timedelta(minutes=off_min)).replace(tzinfo=timezone.utc)
     except (ValueError, IndexError):
         return None
 
@@ -375,22 +380,23 @@ def rank_group(teams, results):
     return final, tbl
 
 
-def simulate_once(played, teams, remaining, overlay, other_pos):
-    """Un tirage. Retourne (qualifié, a_gagné, marge_du_match, [(pos, '1'|'X'|'2')])."""
+def simulate_once(played, teams, remaining, overlay, other_pos, track_pos, sen_group):
+    """Un tirage. Retourne (qualifié, issue, marge, [(pos, '1'|'X'|'2')]) où `issue`
+    vaut 'V'/'N'/'D' pour le PROCHAIN match de l'équipe suivie (None s'il n'y en a
+    plus) et `marge` sa différence de buts, vue de l'équipe suivie."""
     results = {g: list(played[g]) for g in played}
-    sen_won = False
-    sen_margin = 0
+    outcome = None
+    margin = 0
     outs = []
     for pos, m in enumerate(remaining):
         t1, g1, t2, g2 = sim_match(m, overlay)
         results[m["group"]].append((t1, g1, t2, g2))
-        if TEAM in (t1, t2):
-            sen_margin = (g1 - g2) if t1 == TEAM else (g2 - g1)
-            sen_won = sen_margin > 0
+        if pos == track_pos:
+            margin = (g1 - g2) if t1 == TEAM else (g2 - g1)
+            outcome = 'V' if margin > 0 else ('N' if margin == 0 else 'D')
         elif pos in other_pos:
             outs.append((pos, '1' if g1 > g2 else ('2' if g2 > g1 else 'X')))
 
-    sen_group = next(g for g in teams if TEAM in teams[g])
     thirds = []
     sen_top2 = False
     for g in teams:
@@ -402,27 +408,31 @@ def simulate_once(played, teams, remaining, overlay, other_pos):
 
     thirds.sort(key=lambda x: (x[0], x[1], x[2], x[3]), reverse=True)
     best8 = {x[4] for x in thirds[:N_BEST_THIRDS]}
-    return (sen_top2 or TEAM in best8), sen_won, sen_margin, outs
+    return (sen_top2 or TEAM in best8), outcome, margin, outs
 
 
 def run_monte_carlo(played, teams, remaining, overlay, n):
-    """Renvoie un dict : proba, P(victoire), P(qualif|victoire), scénarios par marge,
-    et matchs pivots d'autres groupes (analyse de sensibilité)."""
+    """Renvoie un dict : proba, P(victoire), P(qualif|issue) pour V/N/D, scénarios
+    par marge, et matchs pivots d'autres groupes (analyse de sensibilité)."""
     sen_group = next(g for g in teams if TEAM in teams[g])
     other = [(i, m) for i, m in enumerate(remaining)
              if TEAM not in (m["team1"], m["team2"]) and m["group"] != sen_group]
     other_pos = {i for i, _ in other}
+    track_pos = next_team_match_index(remaining)
 
-    q = won = qgw = 0
+    q = 0
+    otot = {'V': 0, 'N': 0, 'D': 0}; oq = {'V': 0, 'N': 0, 'D': 0}   # issues du prochain match
     mtot = {1: 0, 2: 0, 3: 0}; mq = {1: 0, 2: 0, 3: 0}        # scénarios par marge
     ptot = {i: {'1': 0, 'X': 0, '2': 0} for i in other_pos}    # sensibilité par match
     pq = {i: {'1': 0, 'X': 0, '2': 0} for i in other_pos}
 
     for _ in range(n):
-        ok, sw, mg, outs = simulate_once(played, teams, remaining, overlay, other_pos)
+        ok, oc_team, mg, outs = simulate_once(
+            played, teams, remaining, overlay, other_pos, track_pos, sen_group)
         q += ok
-        if sw:
-            won += 1; qgw += ok
+        if oc_team:
+            otot[oc_team] += 1; oq[oc_team] += ok
+        if oc_team == 'V':
             b = 3 if mg >= 3 else mg
             mtot[b] += 1; mq[b] += ok
         for pos, oc in outs:
@@ -430,7 +440,10 @@ def run_monte_carlo(played, teams, remaining, overlay, n):
             if ok:
                 pq[pos][oc] += 1
 
-    scenarios = {b: (100.0 * mq[b] / mtot[b] if mtot[b] >= 30 else None) for b in (1, 2, 3)}
+    scenarios = {b: (100.0 * mq[b] / mtot[b] if mtot[b] >= MIN_CONDITIONAL_SAMPLE else None)
+                 for b in (1, 2, 3)}
+    p_q_given = {o: (100.0 * oq[o] / otot[o] if otot[o] >= MIN_CONDITIONAL_SAMPLE else None)
+                 for o in 'VND'}
     pivotal = []
     minn = max(40, int(0.015 * n))
     for i, m in other:
@@ -440,8 +453,9 @@ def run_monte_carlo(played, teams, remaining, overlay, n):
             pivotal.append({"m": m, "impact": ps[best] - ps[worst], "best": best,
                             "best_p": ps[best], "worst_p": ps[worst]})
     pivotal.sort(key=lambda x: -x["impact"])
-    return {"prob": 100.0 * q / n, "p_win": 100.0 * won / n,
-            "p_q_given_win": (100.0 * qgw / won) if won else 0.0,
+    return {"prob": 100.0 * q / n, "p_win": 100.0 * otot['V'] / n,
+            "p_q_given": p_q_given,
+            "p_q_given_win": p_q_given['V'] if p_q_given['V'] is not None else 0.0,
             "scenarios": scenarios, "pivotal": pivotal}
 
 
@@ -532,15 +546,39 @@ def notify_error(e):
         pass
 
 
+def next_team_match_index(remaining):
+    """Index dans `remaining` du prochain match de l'équipe suivie (le plus tôt au
+    coup d'envoi ; les matchs sans horaire connu passent en dernier). None si aucun."""
+    cands = [(i, m) for i, m in enumerate(remaining) if TEAM in (m["team1"], m["team2"])]
+    if not cands:
+        return None
+    far = datetime.max.replace(tzinfo=timezone.utc)
+    return min(cands, key=lambda im: (im[1]["kickoff"] or far, im[0]))[0]
+
+
 def next_senegal_match(remaining):
-    for m in remaining:
-        if TEAM in (m["team1"], m["team2"]):
-            return m
-    return None
+    i = next_team_match_index(remaining)
+    return None if i is None else remaining[i]
+
+
+def fmt_outcomes(p_q_given):
+    """Ligne « si victoire / nul / défaite », calculée et non supposée.
+    Si nul ET défaite mènent tous deux à l'élimination, on le dit d'un trait."""
+    v, nul, dfa = (p_q_given.get(o) for o in 'VND')
+    out = []
+    if v is not None:
+        out.append(f"Si victoire : ~{v:.0f}% de qualif.")
+    if nul is not None and dfa is not None and nul < 0.5 and dfa < 0.5:
+        out.append("Nul ou défaite : éliminé.")
+    else:
+        rest = [(lab, p) for lab, p in (("Nul", nul), ("Défaite", dfa)) if p is not None]
+        if rest:
+            out.append(" ".join(f"{lab} : ~{p:.0f}%." for lab, p in rest))
+    return " ".join(out)
 
 
 def fmt_message(mc, delta, played, teams, remaining, reasons):
-    prob, p_qgw = mc["prob"], mc["p_q_given_win"]
+    prob = mc["prob"]
     sen_group = next(g for g in teams if TEAM in teams[g])
     order, tbl = rank_group(teams[sen_group], played[sen_group])
     pos = next((i for i, t in enumerate(order, 1) if t == TEAM), 4)
@@ -556,7 +594,9 @@ def fmt_message(mc, delta, played, teams, remaining, reasons):
         when = ko.astimezone().strftime("%a %d/%m %Hh%M") if ko else "à venir"
         opp = sm["team2"] if sm["team1"] == TEAM else sm["team1"]
         msg += f"\nReste : {TEAM} – {opp} ({when})\n"
-        msg += f"Si victoire : ~{p_qgw:.0f}% de qualif. Nul ou défaite : éliminé.\n"
+        line = fmt_outcomes(mc["p_q_given"])
+        if line:
+            msg += line + "\n"
         labels = {1: "1 but", 2: "2 buts", 3: "3+ buts"}
         parts = [f"{labels[b]} {mc['scenarios'][b]:.0f}%" for b in (1, 2, 3)
                  if mc["scenarios"].get(b) is not None]
@@ -655,9 +695,12 @@ def main():
 
     # Coup d'envoi : équipe suivie en direct (confirme que le pipeline live tourne)
     sen_live = any(TEAM in k for k in overlay)
-    if sen_live and not state.get("sen_live_announced"):
-        should = True; reasons.append("Coup d'envoi — suivi en direct")
-        state["sen_live_announced"] = True
+    if sen_live:
+        if not state.get("sen_live_announced"):
+            should = True; reasons.append("Coup d'envoi — suivi en direct")
+            state["sen_live_announced"] = True
+    else:   # match terminé : on réarme pour le prochain coup d'envoi
+        state["sen_live_announced"] = False
 
     sen_pending = next_senegal_match(remaining) is not None
     if state.get("senegal_match_pending", True) and not sen_pending:
